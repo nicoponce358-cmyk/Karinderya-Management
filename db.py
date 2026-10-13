@@ -5,8 +5,14 @@ db.py — Database layer para sa Karinderya Management System (SQLite + pandas).
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import random
 import os
+
+
+def get_ph_time():
+    """Return the current Philippine date/time."""
+    return datetime.now(ZoneInfo("Asia/Manila"))
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "karinderya.db")
 
@@ -129,13 +135,35 @@ def delete_dish(dish_id: int):
 # ── Sales CRUD ───────────────────────────────────────────────────────────────
 
 def add_sale(sale_date: str, sale_time: str, dish_name: str, quantity: int, price: float):
+    """Mag-record ng bagong sale gamit ang actual Philippine date/time."""
+    
     total = quantity * price
+
+    # Actual Philippine date/time
+    ph_now = get_ph_time()
+
+    # Database format
+    actual_date = ph_now.strftime("%Y-%m-%d")
+    actual_time = ph_now.strftime("%H:%M")
+    created_at = ph_now.strftime("%Y-%m-%d %H:%M:%S")
+
     conn = get_connection()
+
     conn.execute(
-        """INSERT INTO sales (sale_date, sale_time, dish_name, quantity, price, total)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (sale_date, sale_time, dish_name, quantity, price, total),
+        """INSERT INTO sales
+           (sale_date, sale_time, dish_name, quantity, price, total, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            actual_date,
+            actual_time,
+            dish_name,
+            quantity,
+            price,
+            total,
+            created_at,
+        ),
     )
+
     conn.commit()
     conn.close()
 
@@ -256,7 +284,7 @@ def generate_sample_data(days: int = 60):
         return
 
     dishes = list(zip(menu["dish_name"], menu["price"]))
-    today = datetime.now().date()
+    today = get_ph_time().date()
 
     rows = []
     for d in range(days):
