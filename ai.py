@@ -1,41 +1,74 @@
-"""
-ai.py — AI Insights module para sa Karinderya Management System.
-Gumagamit ng Anthropic API kung may key; kung wala, rule-based fallback.
-"""
-
 import os
 import json
+import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 try:
-    from anthropic import Anthropic
+    from groq import Groq
+    HAS_GROQ = True
 except ImportError:
-    Anthropic = None
+    HAS_GROQ = False
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ENV_PATH = os.path.join(BASE_DIR, ".env")
+
+    load_dotenv(ENV_PATH, override=True)
+
+except ImportError:
+    print("python-dotenv is not installed.")
+
+
+# ── Philippine Time ──────────────────────────────────────────────────────────
+
+PH_TZ = ZoneInfo("Asia/Manila")
+
+
+def get_ph_time():
+    """Return the current Philippine date/time."""
+    return datetime.now(PH_TZ)
+
+
+# ── Groq Client ──────────────────────────────────────────────────────────────
 
 def _get_client():
-    """Kumuha ng Anthropic client kung may API key."""
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not api_key or Anthropic is None:
-        return None
-    try:
-        return Anthropic(api_key=api_key)
-    except Exception:
+    """Kumuha ng Groq client kung may GROQ_API_KEY."""
+
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+
+    if not api_key:
+        print("GROQ SETUP: No GROQ_API_KEY found in environment.")
         return None
 
+    if not HAS_GROQ:
+        print("GROQ SETUP: groq package is not installed.")
+        return None
+
+    try:
+        client = Groq(api_key=api_key)
+        print("Groq API key loaded:", True)
+        return client
+
+    except Exception as e:
+        print("GROQ CLIENT ERROR:", repr(e))
+        return None
+
+
+# ── Prompt Builder ───────────────────────────────────────────────────────────
 
 def _build_prompt(summary: dict) -> str:
     """Gumawa ng prompt mula sa summary data."""
-    today = datetime.now().strftime("%A, %B %d, %Y")
-    day_name = datetime.now().strftime("%A")
 
-    prompt = f"""Ikaw ay isang expert food-business consultant para sa maliit na Filipino karinderya.
+    now_ph = get_ph_time()
+    today = now_ph.strftime("%A, %B %d, %Y")
+    day_name = now_ph.strftime("%A")
+
+    prompt = f"""
+Ikaw ay isang expert food-business consultant para sa maliit na Filipino karinderya.
+
 Ngayon ay {today}.
 
 Narito ang summary ng sales data ng karinderya:
@@ -56,57 +89,174 @@ HOURLY SALES PATTERN:
 SALES BY DAY OF WEEK:
 {json.dumps(summary.get('by_day_name', []), indent=2)}
 
-Base sa data na ito, ibigay ang sumusunod na insights sa TAGLISH (Tagalog-English mix), simple at madaling intindihin:
+Base sa data na ito, ibigay ang sumusunod na insights sa TAGLISH
+(Tagalog-English mix), simple at madaling intindihin:
 
-1. **📊 Buod ng Sales Patterns** — Ano ang trend ng benta? Anong araw pinaka-malakas? Anong oras peak?
+1. **📊 Buod ng Sales Patterns**
+   - Ano ang trend ng benta?
+   - Anong araw pinaka-malakas?
+   - Anong oras ang peak?
 
-2. **🍳 Recommendations sa Luto** — Anong dish ang dagdagan ng luto? Alin ang bawasan? Ilang servings ang ihanda bukas ({day_name}) base sa average ng parehong araw ng linggo?
+2. **🍳 Recommendations sa Luto**
+   - Anong dish ang dagdagan?
+   - Alin ang bawasan?
+   - Ilang servings ang ihanda bukas ({day_name})?
 
-3. **📦 Inventory & Food Waste Tips** — Paano mababawasan ang nasasayang na pagkain? Anong ingredients ang i-prioritize?
+3. **📦 Inventory & Food Waste Tips**
+   - Paano mababawasan ang food waste?
+   - Anong ingredients ang dapat i-prioritize?
 
-4. **💰 Paano Dadagdagan ang Kita** — Practical tips para sa maliit na karinderya — combos, pricing, timing, etc.
+4. **💰 Paano Dadagdagan ang Kita**
+   - Magbigay ng practical tips tulad ng combos, pricing at timing.
 
-Gumamit ng emoji at bullet points. Simple lang ang salita, para maintindihan ng karaniwang tindero/tindera.
-Huwag masyadong mahaba — mga 400-600 words lang."""
+IMPORTANT:
+- Gumamit ng 12-hour AM/PM time format.
+- Halimbawa: 17:00 = 05:00 PM.
+- Huwag gumamit ng military/24-hour time sa final answer.
+- Gumamit ng emoji at bullet points.
+- Simple at madaling maintindihan.
+- Huwag masyadong mahaba.
+"""
 
     return prompt
 
 
+# ── Main Entry Point ─────────────────────────────────────────────────────────
+
 def get_ai_insights(summary: dict) -> dict:
     """
-    Kumuha ng AI insights. Returns dict na may:
-      - "source": "ai" | "rule-based"
-      - "insights": str (markdown)
-      - "error": str | None
+    Kumuha ng AI insights gamit ang Groq.
+
+    Returns:
+        source: ai | rule-based
+        insights: markdown string
+        error: error message or None
     """
+
     client = _get_client()
 
     if client is not None:
-        return _call_anthropic(client, summary)
-    else:
-        return _rule_based_insights(summary)
+        return _call_groq(client, summary)
+
+    return _rule_based_insights(summary)
 
 
-def _call_anthropic(client, summary: dict) -> dict:
-    """Tawagan ang Anthropic API para sa insights."""
-    try:
-        prompt = _build_prompt(summary)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text
-        return {"source": "ai", "insights": text, "error": None}
-    except Exception as e:
-        # Fallback sa rule-based kung may error
-        result = _rule_based_insights(summary)
-        result["error"] = f"Hindi ma-access ang AI API ({str(e)[:80]}). Gamit ang rule-based analysis."
-        return result
+# ── Groq API ─────────────────────────────────────────────────────────────────
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [2, 4, 6]
+
+_RETRYABLE_KEYWORDS = [
+    "429",
+    "rate limit",
+    "503",
+    "unavailable",
+    "overloaded",
+    "temporarily",
+    "timeout",
+    "internal",
+    "504",
+]
+
+
+def _is_retryable(error: Exception) -> bool:
+    """Check kung temporary ang API error."""
+
+    error_str = str(error).lower()
+
+    return any(
+        keyword in error_str
+        for keyword in _RETRYABLE_KEYWORDS
+    )
+
+
+def _call_groq(client, summary: dict) -> dict:
+    """Tawagan ang Groq API para gumawa ng AI insights."""
+
+    prompt = _build_prompt(summary)
+    last_error = None
+    attempt = 0
+
+    for attempt in range(1, MAX_RETRIES + 1):
+
+        try:
+            print(f"GROQ ATTEMPT {attempt}")
+
+            response = client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an AI business analyst specializing "
+                            "in small Filipino karinderya businesses. "
+                            "Give practical, data-based recommendations."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0.5,
+                max_completion_tokens=1500,
+            )
+
+            text = response.choices[0].message.content
+
+            print("GROQ SUCCESS")
+
+            return {
+                "source": "ai",
+                "insights": text,
+                "error": None,
+            }
+
+        except Exception as e:
+
+            last_error = e
+
+            print(
+                f"GROQ ERROR "
+                f"(attempt {attempt}/{MAX_RETRIES}):",
+                repr(e)
+            )
+
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+
+                delay = RETRY_DELAYS[attempt - 1]
+
+                print(
+                    f"Retryable error. "
+                    f"Waiting {delay}s..."
+                )
+
+                time.sleep(delay)
+                continue
+
+            break
+
+    print(
+        f"GROQ FAILED after {attempt} attempt(s). "
+        "Using rule-based fallback."
+    )
+
+    result = _rule_based_insights(summary)
+
+    result["error"] = (
+        f"⚠️ Hindi ma-access ang Groq AI API "
+        f"after {attempt} attempt(s).\n\n"
+        f"**Error:** `{str(last_error)}`\n\n"
+        f"Gamit ang rule-based analysis bilang fallback."
+    )
+
+    return result
+
+
+# ── Rule-Based Fallback ──────────────────────────────────────────────────────
 
 def _rule_based_insights(summary: dict) -> dict:
-    """Rule-based fallback kung walang API key."""
+    """Fallback kung hindi available ang Groq API."""
 
     total = summary.get("total_sales", 0)
     avg_daily = summary.get("avg_daily_sales", 0)
@@ -117,94 +267,179 @@ def _rule_based_insights(summary: dict) -> dict:
     transactions = summary.get("total_transactions", 0)
 
     if transactions == 0:
+
         return {
             "source": "rule-based",
-            "insights": "⚠️ **Walang sales data pa.** Mag-record muna ng mga benta o pindutin ang 'Generate Sample Data' para ma-test ang system.",
+            "insights": (
+                "⚠️ **Walang sales data pa.** "
+                "Mag-record muna ng mga benta o pindutin ang "
+                "'Generate Sample Data' para ma-test ang system."
+            ),
             "error": None,
         }
 
-    # Find peak hour
+    # Peak hour
     peak_hour = None
+
     if hourly:
-        peak = max(hourly, key=lambda x: x.get("revenue", 0))
+        peak = max(
+            hourly,
+            key=lambda x: x.get("revenue", 0)
+        )
+
         peak_hour = peak.get("hour", 12)
 
-    # Find best day
+    # Best day
     best_day = None
+
     if by_day:
-        best = max(by_day, key=lambda x: x.get("avg_revenue", 0))
+        best = max(
+            by_day,
+            key=lambda x: x.get("avg_revenue", 0)
+        )
+
         best_day = best.get("day_name", "N/A")
 
     # Top dish
-    top_dish = top_dishes[0]["dish_name"] if top_dishes else "N/A"
-    top_revenue = top_dishes[0].get("revenue", 0) if top_dishes else 0
-    top_qty = top_dishes[0].get("qty", 0) if top_dishes else 0
+    top_dish = (
+        top_dishes[0]["dish_name"]
+        if top_dishes
+        else "N/A"
+    )
+
+    top_revenue = (
+        top_dishes[0].get("revenue", 0)
+        if top_dishes
+        else 0
+    )
+
+    top_qty = (
+        top_dishes[0].get("qty", 0)
+        if top_dishes
+        else 0
+    )
 
     # Bottom dish
-    bot_dish = bottom_dishes[-1]["dish_name"] if bottom_dishes else "N/A"
-    bot_qty = bottom_dishes[-1].get("qty", 0) if bottom_dishes else 0
+    bot_dish = (
+        bottom_dishes[-1]["dish_name"]
+        if bottom_dishes
+        else "N/A"
+    )
 
-    # Build avg servings per dish
+    bot_qty = (
+        bottom_dishes[-1].get("qty", 0)
+        if bottom_dishes
+        else 0
+    )
+
+    # Suggested servings
     serving_recs = []
-    for d in top_dishes:
-        name = d.get("dish_name", "")
-        qty = d.get("qty", 0)
-        num_days_data = max(summary.get("total_transactions", 1) // 15, 1)
-        avg_per_day = round(qty / max(num_days_data, 1))
-        buffer = max(round(avg_per_day * 0.2), 1)
-        serving_recs.append(f"  - **{name}**: ~{avg_per_day} servings + {buffer} extra (buffer)")
 
-    peak_str = f"{peak_hour}:00" if peak_hour is not None else "N/A"
-    peak_period = ""
+    for dish in top_dishes:
+
+        name = dish.get("dish_name", "")
+        qty = dish.get("qty", 0)
+
+        num_days_data = max(
+            summary.get("total_transactions", 1) // 15,
+            1
+        )
+
+        avg_per_day = round(
+            qty / max(num_days_data, 1)
+        )
+
+        buffer = max(
+            round(avg_per_day * 0.2),
+            1
+        )
+
+        serving_recs.append(
+            f"- **{name}**: ~{avg_per_day} servings "
+            f"+ {buffer} extra (buffer)"
+        )
+
+    # Convert peak hour to AM/PM
     if peak_hour is not None:
+
+        peak_str = datetime.strptime(
+            f"{int(peak_hour):02d}:00",
+            "%H:%M"
+        ).strftime("%I:%M %p")
+
+    else:
+        peak_str = "N/A"
+
+    # Peak period
+    peak_period = ""
+
+    if peak_hour is not None:
+
         if 6 <= peak_hour <= 10:
             peak_period = "(umaga/breakfast)"
+
         elif 11 <= peak_hour <= 14:
             peak_period = "(tanghali/lunch)"
+
         elif 17 <= peak_hour <= 20:
             peak_period = "(gabi/dinner)"
 
-    insights = f"""## 📊 Sales Patterns Summary
+    # Combo price estimate
+    combo_price = 0
 
-- 💰 **Total Sales**: ₱{total:,.2f} — average of **₱{avg_daily:,.2f} per day**
-- 📈 **Strongest day**: **{best_day}** — most customers
-- ⏰ **Peak hours**: **{peak_str}** {peak_period} — highest sales volume
-- 🏆 **Best-seller**: **{top_dish}** — {top_qty} servings, ₱{top_revenue:,.2f} total revenue
-- 📉 **Least-selling**: **{bot_dish}** — only {bot_qty} servings
+    if top_dishes and top_qty > 0:
+        combo_price = (
+            top_revenue / top_qty
+        ) + 15
+
+    insights = f"""
+## 📊 Sales Patterns Summary
+
+- 💰 **Total Sales:** ₱{total:,.2f}
+- 📅 **Average Daily Sales:** ₱{avg_daily:,.2f}
+- 📈 **Strongest Day:** **{best_day}**
+- ⏰ **Peak Hours:** **{peak_str}** {peak_period}
+- 🏆 **Best-seller:** **{top_dish}** — {top_qty} servings
+- 📉 **Least-selling:** **{bot_dish}** — {bot_qty} servings
 
 ---
 
 ## 🍳 Cooking Recommendations
 
-Based on sales trends, here is the suggested preparation for tomorrow:
+Suggested preparation:
 
 {chr(10).join(serving_recs)}
 
-💡 **Tips**:
-- Increase preparation for **{top_dish}** — it's always selling out
-- Consider reducing **{bot_dish}** — low demand
-- If there's excess {bot_dish}, offer it as a promo combo with Rice
+💡 **Tips:**
+
+- Dagdagan ang preparation ng **{top_dish}**.
+- Bawasan nang kaunti ang **{bot_dish}** dahil mababa ang demand.
+- Puwedeng gawing combo ang low-selling dish kasama ang rice.
 
 ---
 
 ## 📦 Inventory & Food Waste Tips
 
-- 🥬 **Prioritize ingredients for top-sellers** — lower risk of waste
-- 🧊 **Prepare more on weekends** ({best_day} is the peak!) and less on weekdays
-- ♻️ If there are leftover dishes, offer a **"last order" promo** before closing — half price
-- 📝 Track which dishes always have leftovers — reduce their preparation
+- 🥬 Prioritize ingredients para sa best-selling dishes.
+- 🧊 Maghanda ng mas maraming stocks sa **{best_day}**.
+- ♻️ Gumawa ng last-order promo para mabawasan ang leftovers.
+- 📝 I-track ang dishes na madalas may tira.
 
 ---
 
 ## 💰 How to Increase Revenue
 
-- 🍚 **Combo Meals**: {top_dish} + Rice = ₱{(top_dishes[0].get('revenue',0)/max(top_qty,1) + 15):.0f} combo — cheaper per item but higher volume
-- ⏰ **Lunch Specials**: Offer a discounted combo during 11AM-1PM to maximize peak hours
-- 📱 **Loyalty card**: 10th order = free Rice — to encourage repeat customers
-- 📊 Study weekly trends — adjust the menu based on actual demand
-- 🏷️ **Slightly increase** (₱5-10) the price of best-sellers — customers won't notice much but it adds up significantly
+- 🍚 **Combo Meal:** {top_dish} + Rice ≈ ₱{combo_price:.0f}
+- ⏰ Mag-offer ng specials bago o during peak hours.
+- 📱 Gumamit ng simple loyalty promo tulad ng 10th order = free rice.
+- 📊 Tingnan ang weekly sales trends bago mag-adjust ng menu.
+- 🏷️ Puwedeng mag-test ng maliit na price adjustment sa popular dishes.
 
-> 💡 *This is a rule-based analysis. For more detailed insights, set up an Anthropic API key in the `.env` file.*
+> 💡 *Rule-based analysis ito dahil hindi available ang Groq AI.*
 """
 
-    return {"source": "rule-based", "insights": insights, "error": None}
+    return {
+        "source": "rule-based",
+        "insights": insights,
+        "error": None,
+    }
