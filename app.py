@@ -8,8 +8,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import db
 import ai
+from ai import get_ph_time
 
 # ── Page config ──────────────────────────────────────────────────────────────
 
@@ -247,6 +249,22 @@ COLORS = ["#E8751A", "#F5A623", "#27AE60", "#3498DB", "#9B59B6",
           "#E74C3C", "#1ABC9C", "#F39C12", "#2ECC71", "#E67E22"]
 
 
+def _to_ampm(t_str):
+    """Convert '20:55' -> '08:55 PM' for user-facing display."""
+    try:
+        return datetime.strptime(str(t_str).strip()[:5], "%H:%M").strftime("%I:%M %p")
+    except (ValueError, TypeError):
+        return t_str
+
+
+def _hour_to_ampm(h):
+    """Convert hour integer (e.g. 17) -> '05:00 PM' for display."""
+    try:
+        return datetime.strptime(f"{int(h)}:00", "%H:%M").strftime("%I:%M %p")
+    except (ValueError, TypeError):
+        return f"{h}:00"
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -281,7 +299,7 @@ with st.sidebar:
         st.download_button(
             "📥 Export to CSV",
             data=csv,
-            file_name=f"karinderya_sales_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"karinderya_sales_{get_ph_time().strftime('%Y%m%d')}.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -306,13 +324,25 @@ if page == "📊 Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Philippine Time Display ──
+    _ph_now = get_ph_time()
+    st.markdown(f"""
+    <div style='text-align: right; margin-top: -16px; margin-bottom: 12px;'>
+        <span style='background: rgba(22,33,62,0.8); border: 1px solid rgba(245,166,35,0.25);
+                     border-radius: 10px; padding: 6px 14px; font-size: 0.82rem;
+                     color: #F5A623; font-weight: 500;'>
+            🇵🇭 Philippine Time: {_ph_now.strftime('%B %d, %Y - %I:%M %p')}
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
     sales_df = db.get_all_sales()
 
     if sales_df.empty:
         st.info("📭 **No sales data yet.** Record a sale or click '🎲 Generate Sample Data' in the sidebar to get started.")
     else:
         sales_df["sale_date"] = pd.to_datetime(sales_df["sale_date"])
-        today = pd.Timestamp(datetime.now().date())
+        today = pd.Timestamp(get_ph_time().date())
         week_start = today - timedelta(days=today.weekday())
         month_start = today.replace(day=1)
 
@@ -421,7 +451,7 @@ if page == "📊 Dashboard":
                 revenue=("total", "sum"), orders=("quantity", "sum")
             ).reindex(range(5, 22), fill_value=0).reset_index()
 
-            hourly["label"] = hourly["hour"].apply(lambda h: f"{h}:00")
+            hourly["label"] = hourly["hour"].apply(_hour_to_ampm)
 
             fig_hours = go.Figure()
             fig_hours.add_trace(go.Bar(
@@ -487,6 +517,18 @@ elif page == "🧾 Record Sale":
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Philippine Time Display ──
+    _ph_now = get_ph_time()
+    st.markdown(f"""
+    <div style='text-align: right; margin-top: -16px; margin-bottom: 12px;'>
+        <span style='background: rgba(22,33,62,0.8); border: 1px solid rgba(245,166,35,0.25);
+                     border-radius: 10px; padding: 6px 14px; font-size: 0.82rem;
+                     color: #F5A623; font-weight: 500;'>
+            🇵🇭 Philippine Time: {_ph_now.strftime('%B %d, %Y - %I:%M %p')}
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
     menu_df = db.get_active_dishes()
     dish_list = menu_df["dish_name"].tolist() if not menu_df.empty else []
 
@@ -495,13 +537,29 @@ elif page == "🧾 Record Sale":
 
     with st.form("sale_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
-        with col1:
-            sale_date = st.date_input("📅 Date", value=datetime.now().date())
-            sale_time = st.time_input("🕐 Time", value=datetime.now().time())
-        with col2:
-            selected_dish = st.selectbox("🍲 Dish", options=dish_list, index=0 if dish_list else None)
-            quantity = st.number_input("📦 Quantity", min_value=1, max_value=100, value=1, step=1)
 
+    with col1:
+        selected_dish = st.selectbox(
+            "🍲 Dish",
+            options=dish_list,
+            index=0 if dish_list else None
+        )
+
+        quantity = st.number_input(
+            "📦 Quantity",
+            min_value=1,
+            max_value=100,
+            value=1,
+            step=1
+        )
+
+    with col2:
+        ph_now = get_ph_time()
+
+        st.info(
+            f"📅 Date: {ph_now.strftime('%B %d, %Y')}\n\n"
+            f"🕐 Time: {ph_now.strftime('%I:%M %p')}"
+        )
         # Auto price
         if selected_dish and not menu_df.empty:
             price = float(menu_df[menu_df["dish_name"] == selected_dish]["price"].values[0])
@@ -527,13 +585,15 @@ elif page == "🧾 Record Sale":
             if not selected_dish:
                 st.error("❌ Please select a dish first!")
             else:
+                ph_now = get_ph_time()
+
                 db.add_sale(
-                    sale_date.isoformat(),
-                    sale_time.strftime("%H:%M"),
+                    ph_now.strftime("%Y-%m-%d"),
+                    ph_now.strftime("%H:%M"),
                     selected_dish,
                     quantity,
                     price_input,
-                )
+)
                 st.success(f"✅ Saved! {selected_dish} × {quantity} = **₱{total:,.2f}**")
                 st.rerun()
 
@@ -545,6 +605,7 @@ elif page == "🧾 Record Sale":
         st.info("No sales recorded yet.")
     else:
         display_df = recent[["id", "sale_date", "sale_time", "dish_name", "quantity", "price", "total"]].copy()
+        display_df["sale_time"] = display_df["sale_time"].apply(_to_ampm)
         display_df.columns = ["ID", "Date", "Time", "Dish", "Qty", "Price (₱)", "Total (₱)"]
 
         st.dataframe(
@@ -564,7 +625,7 @@ elif page == "🧾 Record Sale":
             target_row = recent[recent["id"] == sale_id]
             if not target_row.empty:
                 row = target_row.iloc[0]
-                st.markdown(f"**Current:** {row['dish_name']} × {row['quantity']} = ₱{row['total']:,.2f} ({row['sale_date']} {row['sale_time']})")
+                st.markdown(f"**Current:** {row['dish_name']} × {row['quantity']} = ₱{row['total']:,.2f} ({row['sale_date']} {_to_ampm(row['sale_time'])})")
 
                 tab_edit, tab_delete = st.tabs(["✏️ Edit", "🗑️ Delete"])
 
@@ -717,7 +778,7 @@ elif page == "🤖 AI Insights":
             min_date = pd.to_datetime(sales_df["sale_date"]).min().date()
             start = st.date_input("From", value=min_date, key="ai_start")
         with range_col2:
-            end = st.date_input("To", value=datetime.now().date(), key="ai_end")
+            end = st.date_input("To", value=get_ph_time().date(), key="ai_end")
 
         filtered = db.get_sales_range(start.isoformat(), end.isoformat())
         summary = db.sales_summary(filtered)
@@ -738,7 +799,7 @@ elif page == "🤖 AI Insights":
             if result.get("error"):
                 st.warning(result["error"])
 
-            source_label = "🤖 Anthropic AI" if result["source"] == "ai" else "📐 Rule-Based Analysis"
+            source_label = "🤖  Groq AI" if result["source"] == "ai" else "📐 Rule-Based Analysis"
             st.markdown(f"""
             <div style='background: rgba(245,166,35,0.08); border: 1px solid rgba(245,166,35,0.2);
                         border-radius: 12px; padding: 10px 16px; margin-bottom: 12px;
@@ -764,13 +825,13 @@ elif page == "🤖 AI Insights":
             """, unsafe_allow_html=True)
 
             # Tip about API key
-            with st.expander("🔑 How to set up an Anthropic API key"):
+            with st.expander("🔑 How to set up a Groq API key"):
                 st.markdown("""
                 1. Create a `.env` file in the project folder
                 2. Add this line inside:
                 ```
-                ANTHROPIC_API_KEY=sk-ant-xxxxxxxxx
+                    GROQ_API_KEY=your-groq-api-key-here
                 ```
-                3. Get your API key at [console.anthropic.com](https://console.anthropic.com)
+                3. Get your API key at [https://groq.com/](https://groq.com/)
                 4. Without a key, the system will use **rule-based analysis** — which still works great! 👍
                 """)
